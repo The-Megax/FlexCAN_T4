@@ -32,6 +32,8 @@
   SOFTWARE.
 */
 
+// ram2: https://stackoverflow.com/questions/29981528/how-may-i-create-a-matrix-in-c-using-malloc-and-avoiding-memory-problems-how-i
+
 
 #ifndef CIRCULAR_BUFFER_H
 #define CIRCULAR_BUFFER_H
@@ -42,8 +44,13 @@ class Circular_Buffer {
     public:
 #if FLEXCAN_RAM2_MODE
         Circular_Buffer() {
-            _cbuf =  (T *)calloc(_size * multi + 2,  sizeof(T));
-            _cabuf = mtrx_calloc (_size, multi + 2);
+            _cbuf = (T*)calloc(_size * multi + 2,  sizeof(T));
+            _cabuf = mtrx_calloc(_size, multi + 2);
+        }
+
+        ~Circular_Buffer() {
+            free(_cbuf);
+            mtrx_free(_size, _cabuf);
         }
 #endif
 
@@ -101,7 +108,8 @@ class Circular_Buffer {
         volatile uint16_t _available = 0;
 
 #if FLEXCAN_RAM2_MODE
-        T** mtrx_calloc (size_t m, size_t n);
+        T** mtrx_calloc(size_t m, size_t n);
+        void mtrx_free(size_t m, T** matrix);
 
         T* _cbuf = nullptr;
         T** _cabuf = nullptr;
@@ -114,25 +122,33 @@ class Circular_Buffer {
 #if FLEXCAN_RAM2_MODE
 template<typename T, uint16_t _size, uint16_t multi>
 T** Circular_Buffer<T,_size,multi>::mtrx_calloc (size_t m, size_t n) {
-    T **array = (T **)calloc (m, sizeof *array);
+    T **array = (T **)calloc(m, sizeof *array);
 
-    if (!array) {   /* validate allocation  */
+    if(!array) {   /* validate allocation  */
         //fprintf (stderr, "%s() error: memory allocation failed.\n", __func__);
         //exit (EXIT_FAILURE);
         return nullptr;
     }
 
-    for (size_t i = 0; i < m; i++)
-    {
-        array[i] = (T*)calloc (n, sizeof **array);
+    for(size_t i = 0; i < m; i++){
+        array[i] = (T*)calloc(n, sizeof **array);
 
-        if (!array[i]) {   /* validate allocation  */
+        if(!array[i]) {   /* validate allocation  */
             //fprintf (stderr, "%s() error: memory allocation failed.\n", __func__);
             //exit (EXIT_FAILURE);
             return nullptr;
         }
     }
     return array;
+}
+
+template<typename T, uint16_t _size, uint16_t multi>
+void Circular_Buffer<T,_size,multi>::mtrx_free(size_t m, T **matrix) {
+    for(size_t i = 0; i < m; i++) {
+        free(matrix[i]);
+    }
+
+    free(matrix);
 }
 #endif
 
