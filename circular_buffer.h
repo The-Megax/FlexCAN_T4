@@ -40,6 +40,12 @@
 template<typename T, uint16_t _size, uint16_t multi = 0>
 class Circular_Buffer {
     public:
+#if FLEXCAN_RAM2_MODE
+        Circular_Buffer() {
+            _cbuf =  (T *)calloc(_size * multi + 2,  sizeof(T));
+            _cabuf = mtrx_calloc (_size, multi + 2);
+        }
+#endif
 
         void push_back(T value) { return write(value); }
         void push_front(T value);
@@ -94,10 +100,41 @@ class Circular_Buffer {
         volatile uint16_t tail = 0;
         volatile uint16_t _available = 0;
 
+#if FLEXCAN_RAM2_MODE
+        T** mtrx_calloc (size_t m, size_t n);
+
+        T* _cbuf = nullptr;
+        T** _cabuf = nullptr;
+#else
         T _cbuf[_size];
         T _cabuf[_size][multi+2];
+#endif
 };
 
+#if FLEXCAN_RAM2_MODE
+template<typename T, uint16_t _size, uint16_t multi>
+T** Circular_Buffer<T,_size,multi>::mtrx_calloc (size_t m, size_t n) {
+    T **array = (T **)calloc (m, sizeof *array);
+
+    if (!array) {   /* validate allocation  */
+        //fprintf (stderr, "%s() error: memory allocation failed.\n", __func__);
+        //exit (EXIT_FAILURE);
+        return nullptr;
+    }
+
+    for (size_t i = 0; i < m; i++)
+    {
+        array[i] = (T*)calloc (n, sizeof **array);
+
+        if (!array[i]) {   /* validate allocation  */
+            //fprintf (stderr, "%s() error: memory allocation failed.\n", __func__);
+            //exit (EXIT_FAILURE);
+            return nullptr;
+        }
+    }
+    return array;
+}
+#endif
 
 template<typename T, uint16_t _size, uint16_t multi>
 bool Circular_Buffer<T,_size,multi>::remove(uint16_t pos) {
