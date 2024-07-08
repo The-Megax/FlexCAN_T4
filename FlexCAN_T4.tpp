@@ -1012,49 +1012,67 @@ FCTP_FUNC int FCTP_OPT::write(FLEXCAN_MAILBOX mb_num, const CAN_message_t &msg) 
   if ( mb_num < mailboxOffset() ) return 0; /* FIFO doesn't transmit */
   volatile uint32_t *mbxAddr = &(*(volatile uint32_t*)(_bus + 0x80 + (mb_num * 0x10)));
   if ( !((FLEXCAN_get_code(mbxAddr[0])) >> 3) ) return 0; /* not a transmit mailbox */
+
+  NVIC_DISABLE_IRQ(nvicIrq);
+
   if ( msg.seq ) {
     int first_tx_mb = getFirstTxBox();
     if ( FLEXCAN_get_code(FLEXCANb_MBn_CS(_bus, first_tx_mb)) == FLEXCAN_MB_CODE_TX_INACTIVE ) {
       writeTxMailbox(first_tx_mb, msg);
+      NVIC_ENABLE_IRQ(nvicIrq);
       return 1; /* transmit entry accepted */
     }
     else {
       CAN_message_t msg_copy = msg;
       msg_copy.mb = first_tx_mb;
-      return struct2queueTx(msg_copy); /* queue if no mailboxes found */
+      int result = struct2queueTx(msg_copy); /* queue if no mailboxes found */
+      NVIC_ENABLE_IRQ(nvicIrq);
+      return result; /* queue if no mailboxes found */
     }
   }
   if ( FLEXCAN_get_code(mbxAddr[0]) == FLEXCAN_MB_CODE_TX_INACTIVE ) {
     writeTxMailbox(mb_num, msg);
+    NVIC_ENABLE_IRQ(nvicIrq);
     return 1;
   }
+
   CAN_message_t msg_copy = msg;
   msg_copy.mb = mb_num;
-  return struct2queueTx(msg_copy); /* queue if no mailboxes found */
+  int result = struct2queueTx(msg_copy); /* queue if no mailboxes found */
+  NVIC_ENABLE_IRQ(nvicIrq);
+  return result; /* queue if no mailboxes found */
 }
 
 FCTP_FUNC int FCTP_OPT::write(const CAN_message_t &msg) {
+    NVIC_DISABLE_IRQ(nvicIrq);
+
   if ( msg.seq ) {
     int first_tx_mb = getFirstTxBox();
     if ( FLEXCAN_get_code(FLEXCANb_MBn_CS(_bus, first_tx_mb)) == FLEXCAN_MB_CODE_TX_INACTIVE ) {
       writeTxMailbox(first_tx_mb, msg);
+      NVIC_ENABLE_IRQ(nvicIrq);
       return 1; /* transmit entry accepted */
     }
     else {
       CAN_message_t msg_copy = msg;
       msg_copy.mb = first_tx_mb;
-      return struct2queueTx(msg_copy); /* queue if no mailboxes found */
+      int result = struct2queueTx(msg_copy); /* queue if no mailboxes found */
+      NVIC_ENABLE_IRQ(nvicIrq);
+      return result; /* queue if no mailboxes found */
     }
   }
   for (uint8_t i = mailboxOffset(); i < FLEXCANb_MAXMB_SIZE(_bus); i++) {
     if ( FLEXCAN_get_code(FLEXCANb_MBn_CS(_bus, i)) == FLEXCAN_MB_CODE_TX_INACTIVE ) {
       writeTxMailbox(i, msg);
+      NVIC_ENABLE_IRQ(nvicIrq);
       return 1; /* transmit entry accepted */
     }
   }
   CAN_message_t msg_copy = msg;
   msg_copy.mb = -1;
-  return struct2queueTx(msg_copy); /* queue if no mailboxes found */
+  int result = struct2queueTx(msg_copy); /* queue if no mailboxes found */
+  NVIC_ENABLE_IRQ(nvicIrq);
+  return result;
 }
 
 FCTP_FUNC void FCTP_OPT::onReceive(const FLEXCAN_MAILBOX &mb_num, _MB_ptr handler) {
