@@ -915,12 +915,24 @@ FCTP_FUNC bool FCTP_OPT::setMBFilterRange(FLEXCAN_MAILBOX mb_num, uint32_t id1, 
   return 1;
 }
 
+FCTP_FUNC int FCTP_OPT::readRXBuffer(CAN_message_t &msg) {
+  if ( rxBuffer.size() ) {
+    uint8_t buf[sizeof(CAN_message_t)];
+    rxBuffer.pop_front(buf, sizeof(CAN_message_t));
+    memmove(&msg, buf, sizeof(msg));
+    return 1;
+  }
+
+  return 0; /* message not available */
+}
+
 FCTP_FUNC int FCTP_OPT::readFIFO(CAN_message_t &msg) {
   //delayMicroseconds(150);
   if ( !(FLEXCANb_MCR(_bus) & FLEXCAN_MCR_FEN) ) return 0; /* FIFO is disabled */
   if ( !(FLEXCANb_MCR(_bus) & (1UL << 15)) ) { /* if DMA is not enabled, check interrupt flag, else continue. */
-    if ( FLEXCANb_IMASK1(_bus) & FLEXCAN_IMASK1_BUF5M ) return 0; /* FIFO interrupt enabled, polling blocked */
+    if ( !_withoutFIFOCallback && FLEXCANb_IMASK1(_bus) & FLEXCAN_IMASK1_BUF5M ) return 0; /* FIFO interrupt enabled, polling blocked */
   }
+
   if ( FLEXCANb_IFLAG1(_bus) & FLEXCAN_IFLAG1_BUF5I ) { /* message available */
     volatile uint32_t *mbxAddr = &(*(volatile uint32_t*)(_bus + 0x80));
     uint32_t code = mbxAddr[0];
@@ -952,10 +964,37 @@ FCTP_FUNC int FCTP_OPT::getFirstTxBox() {
 
 FCTP_FUNC int FCTP_OPT::read(CAN_message_t &msg) {
   bool _random = random(0, 2);
+  int status = 0;
+
+  if( _withoutFIFOCallback ) {
+    status = readRXBuffer(msg);
+    if( status ) {
+        return status;
+    }
+  }
+
+  NVICDisableIRQ();
+
+  if( _withoutFIFOCallback ) {
+    // recheking
+    status = readRXBuffer(msg);
+    if( status ) {
+        NVICEnableIRQ();
+        return status;
+    }
+  }
+
   if ( ( !_random ) && ( FLEXCANb_MCR(_bus) & FLEXCAN_MCR_FEN ) &&
-       !( FLEXCANb_IMASK1(_bus) & FLEXCAN_IMASK1_BUF5M ) &&
-       ( FLEXCANb_IFLAG1(_bus) & FLEXCAN_IFLAG1_BUF5I ) ) return readFIFO(msg);
-  return readMB(msg);
+    !( FLEXCANb_IMASK1(_bus) & FLEXCAN_IMASK1_BUF5M ) &&
+    ( FLEXCANb_IFLAG1(_bus) & FLEXCAN_IFLAG1_BUF5I ) ) {
+    status = readFIFO(msg);
+    NVICEnableIRQ();
+    return status;
+  }
+
+  status = readMB(msg);
+  NVICEnableIRQ();
+  return status;
 }
 
 FCTP_FUNC int FCTP_OPT::readMB(CAN_message_t &msg) {
@@ -1008,70 +1047,128 @@ FCTP_FUNC bool FCTP_OPT::struct2queueTx(const CAN_message_t &msg) {
   return -1; /* transmit entry failed, no mailboxes available, queued */
 }
 
+FCTP_FUNC void FCTP_OPT::writeTXBufferMailbox() {
+  if ( txBuffer.size() ) {
+    CAN_message_t frame;
+    uint8_t buf[sizeof(CAN_message_t)];
+    txBuffer.peek_front(buf, sizeof(CAN_message_t));
+    memmove(&frame, buf, sizeof(frame));
+
+    if ( frame.mb == -1 ) {
+      for (uint8_t i = mailboxOffset(); i < FLEXCANb_MAXMB_SIZE(_bus); i++) {
+        if ( FLEXCAN_get_code(FLEXCANb_MBn_CS(_bus, i)) == FLEXCAN_MB_CODE_TX_INACTIVE ) {
+          //Serial.print("DBG NORM: "); Serial.println(frame.mb);
+          writeTxMailbox(i, frame);
+          txBuffer.pop_front();
+        }
+      }
+    }
+    else if ( FLEXCAN_get_code(FLEXCANb_MBn_CS(_bus, frame.mb)) == FLEXCAN_MB_CODE_TX_INACTIVE ) {
+      //Serial.print("DBG SEQ: "); Serial.println(frame.mb);
+      writeTxMailbox(frame.mb, frame);
+      txBuffer.pop_front();
+    }
+  }
+}
+
 FCTP_FUNC int FCTP_OPT::write(FLEXCAN_MAILBOX mb_num, const CAN_message_t &msg) {
   if ( mb_num < mailboxOffset() ) return 0; /* FIFO doesn't transmit */
   volatile uint32_t *mbxAddr = &(*(volatile uint32_t*)(_bus + 0x80 + (mb_num * 0x10)));
   if ( !((FLEXCAN_get_code(mbxAddr[0])) >> 3) ) return 0; /* not a transmit mailbox */
 
-  NVIC_DISABLE_IRQ(nvicIrq);
+  NVICDisableIRQ();
 
   if ( msg.seq ) {
     int first_tx_mb = getFirstTxBox();
     if ( FLEXCAN_get_code(FLEXCANb_MBn_CS(_bus, first_tx_mb)) == FLEXCAN_MB_CODE_TX_INACTIVE ) {
-      writeTxMailbox(first_tx_mb, msg);
-      NVIC_ENABLE_IRQ(nvicIrq);
-      return 1; /* transmit entry accepted */
+      if ( txBuffer.size() ) {
+        writeTXBufferMailbox();
+
+        CAN_message_t msg_copy = msg;
+        msg_copy.mb = first_tx_mb;
+        int result = struct2queueTx(msg_copy); /* queue if no mailboxes found */
+        NVICEnableIRQ();
+        return result; /* queue if no mailboxes found */
+      }
+      else {
+        writeTxMailbox(first_tx_mb, msg);
+        NVICEnableIRQ();
+        return 1; /* transmit entry accepted */
+      }
     }
     else {
       CAN_message_t msg_copy = msg;
       msg_copy.mb = first_tx_mb;
       int result = struct2queueTx(msg_copy); /* queue if no mailboxes found */
-      NVIC_ENABLE_IRQ(nvicIrq);
+      NVICEnableIRQ();
       return result; /* queue if no mailboxes found */
     }
   }
   if ( FLEXCAN_get_code(mbxAddr[0]) == FLEXCAN_MB_CODE_TX_INACTIVE ) {
-    writeTxMailbox(mb_num, msg);
-    NVIC_ENABLE_IRQ(nvicIrq);
-    return 1;
+    if ( txBuffer.size() ) {
+      writeTXBufferMailbox();
+
+      CAN_message_t msg_copy = msg;
+      msg_copy.mb = mb_num;
+      int result = struct2queueTx(msg_copy); /* queue if no mailboxes found */
+      NVICEnableIRQ();
+      return result; /* queue if no mailboxes found */
+    }
+    else {
+      writeTxMailbox(mb_num, msg);
+      NVICEnableIRQ();
+      return 1; /* transmit entry accepted */
+    }
   }
 
   CAN_message_t msg_copy = msg;
   msg_copy.mb = mb_num;
   int result = struct2queueTx(msg_copy); /* queue if no mailboxes found */
-  NVIC_ENABLE_IRQ(nvicIrq);
+  NVICEnableIRQ();
   return result; /* queue if no mailboxes found */
 }
 
 FCTP_FUNC int FCTP_OPT::write(const CAN_message_t &msg) {
-    NVIC_DISABLE_IRQ(nvicIrq);
+    NVICDisableIRQ();
 
   if ( msg.seq ) {
     int first_tx_mb = getFirstTxBox();
     if ( FLEXCAN_get_code(FLEXCANb_MBn_CS(_bus, first_tx_mb)) == FLEXCAN_MB_CODE_TX_INACTIVE ) {
-      writeTxMailbox(first_tx_mb, msg);
-      NVIC_ENABLE_IRQ(nvicIrq);
-      return 1; /* transmit entry accepted */
+      if ( txBuffer.size() ) {
+        writeTXBufferMailbox();
+
+        CAN_message_t msg_copy = msg;
+        msg_copy.mb = first_tx_mb;
+        int result = struct2queueTx(msg_copy); /* queue if no mailboxes found */
+        NVICEnableIRQ();
+        return result; /* queue if no mailboxes found */
+      }
+      else {
+        writeTxMailbox(first_tx_mb, msg);
+        NVICEnableIRQ();
+        return 1; /* transmit entry accepted */
+      }
     }
     else {
       CAN_message_t msg_copy = msg;
       msg_copy.mb = first_tx_mb;
       int result = struct2queueTx(msg_copy); /* queue if no mailboxes found */
-      NVIC_ENABLE_IRQ(nvicIrq);
+      NVICEnableIRQ();
       return result; /* queue if no mailboxes found */
     }
   }
+  // TODO: change first TX buffer use
   for (uint8_t i = mailboxOffset(); i < FLEXCANb_MAXMB_SIZE(_bus); i++) {
     if ( FLEXCAN_get_code(FLEXCANb_MBn_CS(_bus, i)) == FLEXCAN_MB_CODE_TX_INACTIVE ) {
       writeTxMailbox(i, msg);
-      NVIC_ENABLE_IRQ(nvicIrq);
+      NVICEnableIRQ();
       return 1; /* transmit entry accepted */
     }
   }
   CAN_message_t msg_copy = msg;
   msg_copy.mb = -1;
   int result = struct2queueTx(msg_copy); /* queue if no mailboxes found */
-  NVIC_ENABLE_IRQ(nvicIrq);
+  NVICEnableIRQ();
   return result;
 }
 
@@ -1101,35 +1198,15 @@ FCTP_FUNC void FCTP_OPT::onTransmit(_MB_ptr handler) {
 
 FCTP_FUNC uint64_t FCTP_OPT::events() {
   if ( !isEventsUsed ) isEventsUsed = 1;
-  if ( rxBuffer.size() ) {
+  if ( !_withoutFIFOCallback && rxBuffer.size() ) {
     CAN_message_t frame;
-    uint8_t buf[sizeof(CAN_message_t)];
-    rxBuffer.pop_front(buf, sizeof(CAN_message_t));
-    memmove(&frame, buf, sizeof(frame));
+    readRXBuffer(frame);
     mbCallbacks((FLEXCAN_MAILBOX)frame.mb, frame);
   }
-  NVIC_DISABLE_IRQ(nvicIrq);
-  if ( txBuffer.size() ) {
-    CAN_message_t frame;
-    uint8_t buf[sizeof(CAN_message_t)];
-    txBuffer.peek_front(buf, sizeof(CAN_message_t));
-    memmove(&frame, buf, sizeof(frame));
-    if ( frame.mb == -1 ) {
-      for (uint8_t i = mailboxOffset(); i < FLEXCANb_MAXMB_SIZE(_bus); i++) {
-        if ( FLEXCAN_get_code(FLEXCANb_MBn_CS(_bus, i)) == FLEXCAN_MB_CODE_TX_INACTIVE ) {
-          //Serial.print("DBG NORM: "); Serial.println(frame.mb);
-          writeTxMailbox(i, frame);
-          txBuffer.pop_front();
-        }
-      }
-    }
-    else if ( FLEXCAN_get_code(FLEXCANb_MBn_CS(_bus, frame.mb)) == FLEXCAN_MB_CODE_TX_INACTIVE ) {
-      //Serial.print("DBG SEQ: "); Serial.println(frame.mb);
-      writeTxMailbox(frame.mb, frame);
-      txBuffer.pop_front();
-    }
-  }
-  NVIC_ENABLE_IRQ(nvicIrq);
+
+  NVICDisableIRQ();
+  writeTXBufferMailbox();
+  NVICEnableIRQ();
   return (uint64_t)(rxBuffer.size() << 12) | txBuffer.size();
 }
 
@@ -1181,7 +1258,7 @@ FCTP_FUNC void FCTP_OPT::struct2queueRx(const CAN_message_t &msg) {
       if (thisListener->generalCallbackActive) thisListener->frameHandler (cl, -1, cl.bus);
     }
   }
-  if ( !isEventsUsed ) {
+  if ( !_withoutFIFOCallback && !isEventsUsed ) {
     mbCallbacks((FLEXCAN_MAILBOX)msg.mb, msg);	
     return;	
   }
@@ -1191,6 +1268,7 @@ FCTP_FUNC void FCTP_OPT::struct2queueRx(const CAN_message_t &msg) {
 }
 
 FCTP_FUNC void FCTP_OPT::flexcan_interrupt() {
+  isrRunning = true;
   CAN_message_t msg; // setup a temporary storage buffer
   uint64_t imask = readIMASK(), iflag = readIFLAG();
 
@@ -1337,12 +1415,15 @@ FCTP_FUNC void FCTP_OPT::flexcan_interrupt() {
   }
   FLEXCANb_ESR1(_bus) |= esr1;
 
-  asm volatile ("dsb");	
+  asm volatile ("dsb");
+  isrRunning = false;
 }
 
 FCTP_FUNC bool FCTP_OPT::error(CAN_error_t &error, bool printDetails) {
   if ( !busESR1.size() ) return 0;
-  NVIC_DISABLE_IRQ(nvicIrq);
+
+  NVICDisableIRQ();
+
   error.ESR1 = busESR1.read();
   error.ECR = busECR.read();
 
@@ -1368,7 +1449,7 @@ FCTP_FUNC bool FCTP_OPT::error(CAN_error_t &error, bool printDetails) {
   error.TX_ERR_COUNTER = (uint8_t)error.ECR;
 
   if ( printDetails ) printErrors(error);
-  NVIC_ENABLE_IRQ(nvicIrq);
+  NVICEnableIRQ();
   return 1;
 }
 
@@ -1817,6 +1898,27 @@ FCTP_FUNC bool FCTP_OPT::detachObj (CANListener *listener) {
     }
   }
   return false;
+}
+
+FCTP_FUNC void FCTP_OPT::NVICDisableIRQ() {
+  NVIC_DISABLE_IRQ(nvicIrq);
+
+  while ( isrRunning ) {
+    __asm__ volatile("nop");
+  }
+}
+
+FCTP_FUNC void FCTP_OPT::NVICEnableIRQ() {
+  NVIC_ENABLE_IRQ(nvicIrq);
+  triggerCanISR();
+}
+
+FCTP_FUNC void FCTP_OPT::triggerCanISR() {
+  if ( isrRunning ) return;
+
+  if ( NVIC_IS_PENDING(nvicIrq) ) return;
+
+  NVIC_SET_PENDING(nvicIrq);
 }
 
 extern void __attribute__((weak)) ext_output1(const CAN_message_t &msg);

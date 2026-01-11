@@ -452,6 +452,8 @@ FCTP_CLASS class FlexCAN_T4 : public FlexCAN_T4_Base {
     void disableFIFO() { enableFIFO(0); }
     void enableFIFOInterrupt(bool status = 1);
     void disableFIFOInterrupt() { enableFIFOInterrupt(0); }
+    void withoutFIFOCallback(bool status = 1) { _withoutFIFOCallback = status; }
+    void triggerCanISR();
     void mailboxStatus();
     int read(CAN_message_t &msg);
     int readMB(CAN_message_t &msg);
@@ -555,6 +557,12 @@ FCTP_CLASS class FlexCAN_T4 : public FlexCAN_T4_Base {
     uint32_t currentBitrate = 0UL;
     uint8_t mailbox_reader_increment = 0;
     uint8_t busNumber;
+    volatile bool _withoutFIFOCallback = 0;
+    int readRXBuffer(CAN_message_t &msg);
+    void writeTXBufferMailbox();
+    void NVICEnableIRQ();
+    void NVICDisableIRQ();
+    volatile bool isrRunning = false;
     void mbCallbacks(const FLEXCAN_MAILBOX &mb_num, const CAN_message_t &msg);
 };
 
