@@ -1910,7 +1910,7 @@ FCTP_FUNC void FCTP_OPT::NVICDisableIRQ() {
 
 FCTP_FUNC void FCTP_OPT::NVICEnableIRQ() {
   NVIC_ENABLE_IRQ(nvicIrq);
-  //triggerCanISR();
+  triggerCanISR();
 }
 
 FCTP_FUNC void FCTP_OPT::triggerCanISR() {
