@@ -31,6 +31,7 @@
 #include "imxrt_flexcan.h"
 #include "Arduino.h"
 
+__attribute__((unused))
 static void flexcan_isr_can3fd();
 
 FCTPFD_FUNC FCTPFD_OPT::FlexCAN_T4FD() {
@@ -187,7 +188,11 @@ FCTPFD_FUNC void FCTPFD_OPT::setBaudRate(FLEXCAN_FDRATES input, FLEXCAN_RXTX lis
   FLEXCAN_EnterFreezeMode();
   FLEXCANb_FDCTRL(_bus) = (FLEXCANb_FDCTRL(_bus) & 0xFFFF60FF); /* clear TDC values */
   FLEXCANb_CBT(_bus) &= ~(1UL << 31); /* clear BTE bit to edit CTRL1 register */
-  ( listen_only != LISTEN_ONLY ) ? FLEXCANb_CTRL1(_bus) &= ~FLEXCAN_CTRL_LOM : FLEXCANb_CTRL1(_bus) |= FLEXCAN_CTRL_LOM;
+  if ( listen_only != LISTEN_ONLY ) {
+    FLEXCANb_CTRL1(_bus) &= ~FLEXCAN_CTRL_LOM;
+  } else {
+    FLEXCANb_CTRL1(_bus) |= FLEXCAN_CTRL_LOM;
+  }
   if ( input == CAN_1M_2M ) { /* based on 24MHz and 70% sample point */
     setClock(CLK_24MHz);
     FLEXCANb_FDCTRL(_bus) |= (0x801B8300 & 0x9F00);
@@ -375,7 +380,11 @@ FCTPFD_FUNC void FCTPFD_OPT::setRX(FLEXCAN_PINS pin) {
 FCTPFD_FUNC void FCTPFD_OPT::enableDMA(bool state) { /* only CAN3 supports this on 1062, untested */
   bool frz_flag_negate = !(FLEXCANb_MCR(_bus) & FLEXCAN_MCR_FRZ_ACK);
   FLEXCAN_EnterFreezeMode();
-  ( !state ) ? FLEXCANb_MCR(_bus) &= ~0x8000 : FLEXCANb_MCR(_bus) |= 0x8000;
+  if ( !state ) {
+    FLEXCANb_MCR(_bus) &= ~0x8000;
+  } else {
+    FLEXCANb_MCR(_bus) |= 0x8000;
+  }
   if ( frz_flag_negate ) FLEXCAN_ExitFreezeMode();
 }
 
@@ -395,8 +404,19 @@ FCTPFD_FUNC void FCTPFD_OPT::writeIMASK(uint64_t value) {
 }
 
 FCTPFD_FUNC void FCTPFD_OPT::writeIMASKBit(uint8_t mb_num, bool set) {
-  if ( mb_num < 32 ) (( set ) ? FLEXCANb_IMASK1(_bus) |= (1UL << mb_num) : FLEXCANb_IMASK1(_bus) &= ~(1UL << mb_num));
-  else (( set ) ? FLEXCANb_IMASK2(_bus) |= (1UL << (mb_num - 32)) : FLEXCANb_IMASK2(_bus) &= ~(1UL << (mb_num - 32)));
+  if ( mb_num < 32 ) {
+    if ( set ) {
+      FLEXCANb_IMASK1(_bus) |= (1UL << mb_num);
+    } else {
+      FLEXCANb_IMASK1(_bus) &= ~(1UL << mb_num);
+    }
+  } else {
+    if ( set ) {
+      FLEXCANb_IMASK2(_bus) |= (1UL << (mb_num - 32));
+    } else {
+      FLEXCANb_IMASK2(_bus) &= ~(1UL << (mb_num - 32));
+    }
+  }
 }
 
 static void flexcan_isr_can3fd() {

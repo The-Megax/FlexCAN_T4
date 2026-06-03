@@ -419,8 +419,19 @@ FCTP_FUNC uint64_t FCTP_OPT::readIMASK() {
 }
 
 FCTP_FUNC void FCTP_OPT::writeIMASKBit(uint8_t mb_num, bool set) {
-  if ( mb_num < 32 ) (( set ) ? FLEXCANb_IMASK1(_bus) |= (1UL << mb_num) : FLEXCANb_IMASK1(_bus) &= ~(1UL << mb_num));
-  else (( set ) ? FLEXCANb_IMASK2(_bus) |= (1UL << (mb_num - 32)) : FLEXCANb_IMASK2(_bus) &= ~(1UL << (mb_num - 32)));
+  if ( mb_num < 32 ) {
+	if (set) {
+		FLEXCANb_IMASK1(_bus) |= (1UL << mb_num);
+	} else {
+		FLEXCANb_IMASK1(_bus) &= ~(1UL << mb_num);
+	}
+  } else {
+	if (set) {
+		FLEXCANb_IMASK2(_bus) |= (1UL << (mb_num - 32));
+	} else {
+		FLEXCANb_IMASK2(_bus) &= ~(1UL << (mb_num - 32));
+	}
+  }
 }
 
 FCTP_FUNC void FCTP_OPT::writeTxMailbox(uint8_t mb_num, const CAN_message_t &msg) {
@@ -537,7 +548,11 @@ FCTP_FUNC void FCTP_OPT::setBaudRate(uint32_t baud, FLEXCAN_RXTX listen_only) {
   }, propSeg = bitTimingTable[result][0], pSeg1 = bitTimingTable[result][1], pSeg2 = bitTimingTable[result][2];
   FLEXCANb_CTRL1(_bus) = (FLEXCAN_CTRL_PROPSEG(propSeg) | FLEXCAN_CTRL_RJW(1) | FLEXCAN_CTRL_PSEG1(pSeg1) |
                     FLEXCAN_CTRL_PSEG2(pSeg2) | FLEXCAN_CTRL_ERR_MSK | FLEXCAN_CTRL_PRESDIV(divisor));
-  ( listen_only != LISTEN_ONLY ) ? FLEXCANb_CTRL1(_bus) &= ~FLEXCAN_CTRL_LOM : FLEXCANb_CTRL1(_bus) |= FLEXCAN_CTRL_LOM; /* listen-only mode */
+  if ( listen_only != LISTEN_ONLY ) {
+    FLEXCANb_CTRL1(_bus) &= ~FLEXCAN_CTRL_LOM;
+  } else {
+    FLEXCANb_CTRL1(_bus) |= FLEXCAN_CTRL_LOM; /* listen-only mode */
+  }
   if ( frz_flag_negate ) FLEXCAN_ExitFreezeMode();
 }
 
@@ -1441,9 +1456,13 @@ FCTP_FUNC bool FCTP_OPT::error(CAN_error_t &error, bool printDetails) {
   error.TX_WRN = (error.ESR1 & (1UL << 9)) ? 1 : 0;
   error.RX_WRN = (error.ESR1 & (1UL << 8)) ? 1 : 0;
 
-  if ( (error.ESR1 & 0x30) == 0x0 ) strncpy((char*)error.FLT_CONF, "Error Active", (sizeof(error.FLT_CONF) - 1));
-  else if ( (error.ESR1 & 0x30) == 0x1 ) strncpy((char*)error.FLT_CONF, "Error Passive", (sizeof(error.FLT_CONF) - 1));
-  else strncpy((char*)error.FLT_CONF, "Bus off", (sizeof(error.FLT_CONF) - 1));
+  if ( (error.ESR1 & 0x30) == 0x00 ) {
+    strncpy((char*)error.FLT_CONF, "Error Active", (sizeof(error.FLT_CONF) - 1));
+  } else if ( (error.ESR1 & 0x30) == 0x10 ) {
+    strncpy((char*)error.FLT_CONF, "Error Passive", (sizeof(error.FLT_CONF) - 1));
+  } else {
+    strncpy((char*)error.FLT_CONF, "Bus off", (sizeof(error.FLT_CONF) - 1));
+  }
 
   error.RX_ERR_COUNTER = (uint8_t)(error.ECR >> 8);
   error.TX_ERR_COUNTER = (uint8_t)error.ECR;
@@ -1469,7 +1488,11 @@ FCTP_FUNC void FCTP_OPT::printErrors(const CAN_error_t &error) {
 FCTP_FUNC void FCTP_OPT::enableDMA(bool state) { /* only CAN3 supports this on 1062, untested */
   bool frz_flag_negate = !(FLEXCANb_MCR(_bus) & FLEXCAN_MCR_FRZ_ACK);
   FLEXCAN_EnterFreezeMode();
-  ( !state ) ? FLEXCANb_MCR(_bus) &= ~0x8000 : FLEXCANb_MCR(_bus) |= 0x8000;
+  if ( !state ) {
+    FLEXCANb_MCR(_bus) &= ~0x8000;
+  } else {
+    FLEXCANb_MCR(_bus) |= 0x8000;
+  }
   if ( frz_flag_negate ) FLEXCAN_ExitFreezeMode();
 }
 
