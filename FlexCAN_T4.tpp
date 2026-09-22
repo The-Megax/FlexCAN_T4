@@ -32,8 +32,11 @@
 #include "Arduino.h"
 
 #if defined(__IMXRT1062__)
+__attribute__((unused))
 static void flexcan_isr_can3();
+__attribute__((unused))
 static void flexcan_isr_can2();
+__attribute__((unused))
 static void flexcan_isr_can1();
 #endif
 #if defined(__MK20DX256__) || defined(__MK64FX512__)
