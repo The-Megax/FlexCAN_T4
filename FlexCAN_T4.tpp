@@ -40,10 +40,13 @@ __attribute__((unused))
 static void flexcan_isr_can1();
 #endif
 #if defined(__MK20DX256__) || defined(__MK64FX512__)
+__attribute__((unused))
 static void flexcan_isr_can0();
 #endif
 #if defined(__MK66FX1M0__)
+__attribute__((unused))
 static void flexcan_isr_can0();
+__attribute__((unused))
 static void flexcan_isr_can1();
 #endif
 
