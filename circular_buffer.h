@@ -44,7 +44,11 @@ class Circular_Buffer {
     public:
 #if FLEXCAN_RAM2_MODE
         Circular_Buffer() {
-            _cbuf = (T*)calloc(_size * multi + 2,  sizeof(T));
+            // The same sizes as without FLEXCAN_RAM2_MODE (T _cbuf[_size], T _cabuf[_size][multi+2]). The ring of
+            // single values writes _size elements: with _size * multi + 2 a ring without multi (the error status
+            // rings of FlexCAN_T4) had 2 elements and wrote over the next heap blocks, and a queue with multi
+            // (it stores in _cabuf) held _size * multi unused elements.
+            _cbuf = (T*)calloc(_size,  sizeof(T));
             _cabuf = mtrx_calloc(_size, multi + 2);
         }
 
@@ -130,24 +134,32 @@ T** Circular_Buffer<T,_size,multi>::mtrx_calloc (size_t m, size_t n) {
         return nullptr;
     }
 
-    for(size_t i = 0; i < m; i++){
-        array[i] = (T*)calloc(n, sizeof **array);
+    // All rows in one block: row i starts at i * n, the same layout as T _cabuf[m][n] without
+    // FLEXCAN_RAM2_MODE. A block of its own for every row cost a heap header and padding for each row.
+    T *rows = (T*)calloc(m * n, sizeof **array);
 
-        if(!array[i]) {   /* validate allocation  */
-            //fprintf (stderr, "%s() error: memory allocation failed.\n", __func__);
-            //exit (EXIT_FAILURE);
-            return nullptr;
-        }
+    if(!rows) {   /* validate allocation  */
+        //fprintf (stderr, "%s() error: memory allocation failed.\n", __func__);
+        //exit (EXIT_FAILURE);
+        free(array);
+        return nullptr;
+    }
+
+    for(size_t i = 0; i < m; i++){
+        array[i] = rows + i * n;
     }
     return array;
 }
 
 template<typename T, uint16_t _size, uint16_t multi>
 void Circular_Buffer<T,_size,multi>::mtrx_free(size_t m, T **matrix) {
-    for(size_t i = 0; i < m; i++) {
-        free(matrix[i]);
+    (void)m;
+    if(!matrix) {
+        return;
     }
 
+    // The rows are one block, it starts at the first row.
+    free(matrix[0]);
     free(matrix);
 }
 #endif
